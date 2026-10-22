@@ -9,20 +9,13 @@ const SEED = [
   { id: 'seed-2', emoji: '🚕', name: 'Cab', paidBy: 'Raj', amount: 400 },
 ];
 
-const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
-
-// Basic "parse an expense from text" — just enough to work. In Hour 3 you'll replace
-// this naive version with a real AI call (Gemini) that understands messy human sentences.
-function parseExpense(text) {
-  const amountMatch = text.match(/\d[\d,]*(\.\d+)?/);
-  const amount = amountMatch ? Number(amountMatch[0].replace(/,/g, '')) : 0;
-  const name = text.replace(/\d[\d,]*(\.\d+)?/, '').replace(/\s+/g, ' ').trim() || 'Expense';
-  return { id: 'e-' + Date.now(), emoji: '🧾', name: name.charAt(0).toUpperCase() + name.slice(1), paidBy: 'You', amount };
-}
+const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
 export default function Home() {
   const [expenses, setExpenses] = useState(SEED);
-  const [text, setText] = useState('');
+  const [expenseName, setExpenseName] = useState('');
+  const [amount, setAmount] = useState('');
+  const [people, setPeople] = useState('');
   const [ready, setReady] = useState(false);
 
   // Load any saved expenses from the browser on first render.
@@ -44,10 +37,17 @@ export default function Home() {
   const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
 
   const addExpense = () => {
-    const t = text.trim();
-    if (!t) return;
-    setExpenses((list) => [...list, parseExpense(t)]);
-    setText('');
+    const name = expenseName.trim();
+    const value = Number(amount);
+    const personCount = Number(people);
+    if (!name || !amount.trim() || !people.trim() || !Number.isFinite(value) || value <= 0 || !Number.isInteger(personCount) || personCount < 1) return;
+    setExpenses((list) => [...list, {
+      id: 'e-' + Date.now(), emoji: '🧾', name, description: name,
+      paidBy: 'You', amount: value, people: personCount, each: value / personCount,
+    }]);
+    setExpenseName('');
+    setAmount('');
+    setPeople('');
   };
 
   const removeExpense = (id) => setExpenses((list) => list.filter((e) => e.id !== id));
@@ -59,7 +59,7 @@ export default function Home() {
         <div style={styles.header}>
           <div style={styles.brand}>
             <div style={styles.logo}>S</div>
-            <div style={styles.title}>SplitSmart</div>
+            <div style={styles.title}>Sumit Pawse</div>
           </div>
           <div style={styles.groupPill}>My Group</div>
         </div>
@@ -68,13 +68,35 @@ export default function Home() {
         <div style={styles.addRow}>
           <input
             style={styles.input}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
+            value={expenseName}
+            onChange={(e) => setExpenseName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && addExpense()}
-            placeholder="Add an expense…"
-            aria-label="Add an expense"
+            placeholder="Expense name"
+            aria-label="Expense name"
           />
-          <button style={styles.addBtn} onClick={addExpense} aria-label="Add">+</button>
+          <input
+            style={styles.amountInput}
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addExpense()}
+            placeholder="₹ Amount"
+            aria-label="Expense amount in rupees"
+          />
+          <input
+            style={styles.peopleInput}
+            type="number"
+            min="1"
+            step="1"
+            value={people}
+            onChange={(e) => setPeople(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addExpense()}
+            placeholder="People"
+            aria-label="Number of people"
+          />
+          <button style={styles.addBtn} onClick={addExpense} aria-label="Add expense">+</button>
         </div>
 
         {/* Expense list */}
@@ -89,7 +111,10 @@ export default function Home() {
                 <div style={styles.itemName}>{e.name}</div>
                 <div style={styles.itemPaid}>paid by {e.paidBy}</div>
               </div>
-              <div style={styles.itemAmount}>{inr(e.amount)}</div>
+              <div style={styles.itemAmount}>
+                <div>{inr(e.amount)}</div>
+                {e.people > 0 && <div style={styles.itemShare}>{e.people} people · {inr(e.each ?? e.amount / e.people)} each</div>}
+              </div>
               <button style={styles.remove} onClick={() => removeExpense(e.id)} aria-label={`Remove ${e.name}`}>×</button>
             </div>
           ))}
@@ -100,8 +125,7 @@ export default function Home() {
       </div>
 
       <p style={styles.footnote}>
-        SplitSmart starter · deepEntra Academy — Build &amp; Ship It.<br />
-        This is the basic app — you&apos;ll add the AI and a real database next.
+        Sumit Pawse · Expense tracker
       </p>
     </main>
   );
@@ -139,10 +163,18 @@ const styles = {
     fontSize: 12.5, fontWeight: 800, color: 'var(--blue)',
     background: 'rgba(28,95,212,.1)', padding: '6px 12px', borderRadius: 999,
   },
-  addRow: { display: 'flex', gap: 10, marginBottom: 16 },
+  addRow: { display: 'flex', gap: 8, marginBottom: 16 },
   input: {
     flex: 1, border: '1px solid var(--line)', borderRadius: 14, padding: '13px 15px',
     fontSize: 15, outline: 'none', background: '#f7f9fc', color: 'var(--ink)',
+  },
+  amountInput: {
+    width: 112, minWidth: 0, border: '1px solid var(--line)', borderRadius: 14, padding: '13px 10px',
+    fontSize: 14, outline: 'none', background: '#f7f9fc', color: 'var(--ink)',
+  },
+  peopleInput: {
+    width: 78, minWidth: 0, border: '1px solid var(--line)', borderRadius: 14, padding: '13px 8px',
+    fontSize: 14, outline: 'none', background: '#f7f9fc', color: 'var(--ink)',
   },
   addBtn: {
     flex: 'none', width: 48, borderRadius: 14, border: 'none', color: '#fff', fontSize: 24, fontWeight: 700,
@@ -163,6 +195,7 @@ const styles = {
   itemName: { fontWeight: 700, fontSize: 15 },
   itemPaid: { color: 'var(--muted)', fontSize: 12.5, marginTop: 1 },
   itemAmount: { fontWeight: 800, fontSize: 15.5, fontVariantNumeric: 'tabular-nums' },
+  itemShare: { color: 'var(--muted)', fontSize: 11, fontWeight: 500, marginTop: 3, whiteSpace: 'nowrap' },
   remove: {
     flex: 'none', width: 26, height: 26, borderRadius: 8, border: 'none',
     background: 'transparent', color: 'var(--muted)', fontSize: 20, lineHeight: 1,
