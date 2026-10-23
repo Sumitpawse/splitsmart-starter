@@ -203,7 +203,10 @@ export default function Home() {
         ? await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword })
         : await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
       if (result.error) {
-        setAuthMessage(`Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${result.error.message}`);
+        const message = result.error.message || 'Unknown authentication error.';
+        setAuthMessage(message.toLowerCase().includes('email rate limit exceeded')
+          ? 'Supabase has reached its email sending limit. In Supabase, open Authentication → Providers → Email and turn off Confirm Email, then try Create account again. Password sign-in itself does not send email.'
+          : `Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${message}`);
       } else if (authMode === 'signup' && result.data.user?.identities?.length === 0) {
         setAuthMessage('An account already exists for this email. Switch to Sign in. If you first used a magic link, that account may not have a password yet.');
       } else if (authMode === 'signup' && !result.data.session) {
@@ -212,7 +215,10 @@ export default function Home() {
         setAuthMessage(authMode === 'signup' ? 'Account created and signed in.' : 'Signed in.');
       }
     } catch (error) {
-      setAuthMessage(`Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${error.message || 'Check your internet connection and try again.'}`);
+      const message = error.message || 'Check your internet connection and try again.';
+      setAuthMessage(message.toLowerCase().includes('email rate limit exceeded')
+        ? 'Supabase has reached its email sending limit. In Supabase, open Authentication → Providers → Email and turn off Confirm Email, then try Create account again. Password sign-in itself does not send email.'
+        : `Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${message}`);
     } finally {
       setAuthBusy(false);
     }
