@@ -77,6 +77,27 @@ npm run build   # production build
 npm run start   # run the production build
 ```
 
+## Hour 5 — Supabase logins + database
+
+The app uses browser-only `localStorage` when Supabase is not configured. To enable
+email sign-in and cloud persistence:
+
+1. Create a Supabase project, then copy its **Project URL** and **anon public key** from
+   **Project Settings → API**.
+2. Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_SUPABASE_URL` and
+   `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Keep `.env.local` private; it is ignored by Git.
+3. In Supabase **SQL Editor**, run [`supabase/schema.sql`](supabase/schema.sql) to create
+   the expenses table and its per-user row-level security policies.
+4. In Supabase **Authentication → URL Configuration**, allow `http://localhost:3000`
+   (and your deployed site URL when you configure hosting).
+5. Restart the development server with `npm run dev`. Sign in with your email link;
+   expenses will then load from and save to Supabase for that account. Existing browser
+   expenses are imported once when that account has no database expenses yet.
+
+For Vercel, add the same two environment variables in the project's Environment
+Variables settings and redeploy there. This repository change does not configure or
+deploy a Vercel project.
+
 ---
 
 Made for **deepEntra Academy** · [academy.deepentra.ai](https://academy.deepentra.ai)

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createBrowserSupabaseClient, hasSupabaseConfig } from './supabase';
 
 // The starter data — the same "My Group" you see in the course slide. You'll replace
 // this with a real database in Hour 5. For now it lives in the browser (localStorage).
@@ -10,6 +11,40 @@ const SEED = [
 ];
 
 const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+function calculateBalances(expenses) {
+  const paiseByPerson = new Map();
+  expenses.forEach((expense) => {
+    // Older saved entries lack participant shares, so their payer bears the cost.
+    if (!Array.isArray(expense.splits) || !expense.paidBy) return;
+    const amountPaise = Math.round(Number(expense.amount || 0) * 100);
+    paiseByPerson.set(expense.paidBy, (paiseByPerson.get(expense.paidBy) || 0) + amountPaise);
+    expense.splits.forEach((split) => {
+      const sharePaise = Math.round(Number(split.amount || 0) * 100);
+      paiseByPerson.set(split.name, (paiseByPerson.get(split.name) || 0) - sharePaise);
+    });
+  });
+  return [...paiseByPerson.entries()].map(([name, paise]) => ({ name, paise })).filter(({ paise }) => paise !== 0);
+}
+
+function suggestSettlements(balanceEntries) {
+  const debtors = balanceEntries.filter(({ paise }) => paise < 0).map(({ name, paise }) => ({ name, paise: -paise })).sort((a, b) => b.paise - a.paise);
+  const creditors = balanceEntries.filter(({ paise }) => paise > 0).map(({ name, paise }) => ({ name, paise })).sort((a, b) => b.paise - a.paise);
+  const settlements = [];
+  let debtorIndex = 0;
+  let creditorIndex = 0;
+  while (debtorIndex < debtors.length && creditorIndex < creditors.length) {
+    const amountPaise = Math.min(debtors[debtorIndex].paise, creditors[creditorIndex].paise);
+    if (amountPaise > 0) {
+      settlements.push({ from: debtors[debtorIndex].name, to: creditors[creditorIndex].name, paise: amountPaise });
+      debtors[debtorIndex].paise -= amountPaise;
+      creditors[creditorIndex].paise -= amountPaise;
+    }
+    if (debtors[debtorIndex].paise === 0) debtorIndex += 1;
+    if (creditors[creditorIndex].paise === 0) creditorIndex += 1;
+  }
+  return settlements;
+}
 
 function parseExpenseSentence(sentence) {
   const text = sentence.trim();
@@ -59,6 +94,13 @@ function parseExpenseSentence(sentence) {
 }
 
 export default function Home() {
+  const [supabase] = useState(() => createBrowserSupabaseClient());
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(!hasSupabaseConfig);
+  const [authEmail, setAuthEmail] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
+  const [dataMessage, setDataMessage] = useState('');
   const [expenses, setExpenses] = useState(SEED);
   const [sentence, setSentence] = useState('');
   const [description, setDescription] = useState('');
@@ -68,21 +110,108 @@ export default function Home() {
   const [splitMode, setSplitMode] = useState('equal');
   const [ready, setReady] = useState(false);
 
-  // Load any saved expenses from the browser on first render.
+  // Use Supabase auth when configured; otherwise keep browser-only storage.
   useEffect(() => {
+    if (supabase) {
+      supabase.auth.getSession().then(({ data, error }) => {
+        if (error) setAuthMessage(error.message);
+        setUser(data?.session?.user || null);
+        setAuthReady(true);
+      });
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user || null);
+        setAuthReady(true);
+      });
+      return () => subscription.unsubscribe();
+    }
     try {
       const saved = localStorage.getItem('splitsmart.expenses');
       if (saved) setExpenses(JSON.parse(saved));
     } catch {}
     setReady(true);
-  }, []);
+  }, [supabase]);
 
-  // Save whenever the list changes.
   useEffect(() => {
-    if (ready) {
+    if (!supabase || !user) return;
+    let cancelled = false;
+    const loadExpenses = async () => {
+      setReady(false);
+      setExpenses([]);
+      setDataMessage('');
+      const { data, error } = await supabase.from('expenses').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        setDataMessage(`Could not load expenses: ${error.message}`);
+      } else {
+        let rows = data || [];
+        if (rows.length === 0) {
+          try {
+            const saved = JSON.parse(localStorage.getItem('splitsmart.expenses') || '[]');
+            if (Array.isArray(saved) && saved.length) {
+              const importRows = saved.map((expense) => ({
+                user_id: user.id,
+                name: expense.name || expense.description || 'Expense',
+                description: expense.description || expense.name || 'Expense',
+                emoji: expense.emoji || '🧾',
+                paid_by: expense.paidBy || 'You',
+                amount: Number(expense.amount || 0),
+                people: Number(expense.people || expense.splits?.length || 1),
+                each: expense.each ?? null,
+                split_mode: expense.splitMode || 'equal',
+                splits: Array.isArray(expense.splits) ? expense.splits : [],
+              }));
+              const { data: imported, error: importError } = await supabase.from('expenses').insert(importRows).select();
+              if (importError) setDataMessage(`Could not import browser expenses: ${importError.message}`);
+              else {
+                rows = imported || [];
+                localStorage.removeItem('splitsmart.expenses');
+              }
+            }
+          } catch (importError) {
+            setDataMessage(`Could not import browser expenses: ${importError.message}`);
+          }
+        }
+        setExpenses(rows.map((row) => ({
+          id: row.id, emoji: row.emoji || '🧾', name: row.name, description: row.description || row.name,
+          paidBy: row.paid_by, amount: Number(row.amount), people: row.people,
+          each: row.each === null ? null : Number(row.each), splitMode: row.split_mode || 'equal',
+          splits: Array.isArray(row.splits) ? row.splits : [],
+        })));
+      }
+      setReady(true);
+    };
+    loadExpenses();
+    return () => { cancelled = true; };
+  }, [supabase, user]);
+
+  // Save locally only when Supabase is not configured.
+  useEffect(() => {
+    if (ready && !supabase) {
       try { localStorage.setItem('splitsmart.expenses', JSON.stringify(expenses)); } catch {}
     }
-  }, [expenses, ready]);
+  }, [expenses, ready, supabase]);
+
+  const sendSignInLink = async (event) => {
+    event.preventDefault();
+    if (!supabase || !authEmail.trim()) return;
+    setAuthBusy(true);
+    setAuthMessage('');
+    const { error } = await supabase.auth.signInWithOtp({
+      email: authEmail.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setAuthMessage(error ? error.message : 'Check your email for the sign-in link.');
+    setAuthBusy(false);
+  };
+
+  const signOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setDataMessage(`Could not sign out: ${error.message}`);
+      return;
+    }
+    setExpenses([]);
+  };
 
   const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0);
   const amountValue = Number(amount);
@@ -102,15 +231,8 @@ export default function Home() {
   const splits = splitMode === 'equal'
     ? participants.map((person, index) => ({ name: person.name.trim(), amount: (baseSharePaise + (index < extraPaise ? 1 : 0)) / 100 }))
     : participants.map((person, index) => ({ name: person.name.trim(), amount: customShares[index] || 0 }));
-  const balances = expenses.reduce((totals, expense) => {
-    if (!Array.isArray(expense.splits)) return totals;
-    totals[expense.paidBy] = (totals[expense.paidBy] || 0) + Number(expense.amount || 0);
-    expense.splits.forEach((split) => {
-      totals[split.name] = (totals[split.name] || 0) - Number(split.amount || 0);
-    });
-    return totals;
-  }, {});
-  const nonzeroBalances = Object.entries(balances).filter(([, balance]) => Math.abs(balance) >= 0.01);
+  const balanceEntries = calculateBalances(expenses);
+  const settlements = suggestSettlements(balanceEntries);
 
   const updateSentence = (value) => {
     setSentence(value);
@@ -122,15 +244,29 @@ export default function Home() {
     }
   };
 
-  const addExpense = () => {
+  const addExpense = async () => {
     if (!canAddExpense) return;
-    setExpenses((list) => [...list, {
+    const expense = {
       id: 'e-' + Date.now(), emoji: '🧾', name: description.trim(),
       description: description.trim(), paidBy: paidBy.trim(),
       amount: amountValue, people: peopleValue,
       each: splitMode === 'equal' ? amountValue / peopleValue : null,
       splitMode, splits,
-    }]);
+    };
+    if (supabase) {
+      setDataMessage('');
+      const { data, error } = await supabase.from('expenses').insert({
+        user_id: user.id, name: expense.name, description: expense.description, emoji: expense.emoji,
+        paid_by: expense.paidBy, amount: expense.amount, people: expense.people, each: expense.each,
+        split_mode: expense.splitMode, splits: expense.splits,
+      }).select().single();
+      if (error) {
+        setDataMessage(`Could not add expense: ${error.message}`);
+        return;
+      }
+      expense.id = data.id;
+    }
+    setExpenses((list) => [...list, expense]);
     setSentence('');
     setDescription('');
     setAmount('');
@@ -139,7 +275,36 @@ export default function Home() {
     setSplitMode('equal');
   };
 
-  const removeExpense = (id) => setExpenses((list) => list.filter((e) => e.id !== id));
+  const removeExpense = async (id) => {
+    if (supabase) {
+      setDataMessage('');
+      const { error } = await supabase.from('expenses').delete().eq('id', id).eq('user_id', user.id);
+      if (error) {
+        setDataMessage(`Could not remove expense: ${error.message}`);
+        return;
+      }
+    }
+    setExpenses((list) => list.filter((e) => e.id !== id));
+  };
+
+  if (supabase && (!authReady || (user && !ready))) {
+    return <main style={styles.page}><div style={styles.card}>Loading your SplitSmart account…</div></main>;
+  }
+
+  if (supabase && !user) {
+    return <main style={styles.page}>
+      <div style={styles.card}>
+        <div style={styles.header}><div style={styles.brand}><div style={styles.logo}>S</div><div style={styles.title}>SplitSmart</div></div><div style={styles.groupPill}>My Group</div></div>
+        <div style={styles.sectionTitle}>Sign in to SplitSmart</div>
+        <div style={styles.examples}>Enter your email and we’ll send you a secure sign-in link.</div>
+        <form onSubmit={sendSignInLink} style={styles.authForm}>
+          <input style={styles.fieldInput} type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" aria-label="Email address" />
+          <button style={styles.submitBtn} type="submit" disabled={authBusy}>{authBusy ? 'Sending…' : 'Email me a sign-in link'}</button>
+        </form>
+        {authMessage && <div style={styles.authMessage} role="status">{authMessage}</div>}
+      </div>
+    </main>;
+  }
 
   return (
     <main style={styles.page}>
@@ -150,8 +315,13 @@ export default function Home() {
             <div style={styles.logo}>S</div>
             <div style={styles.title}>Sumit Pawse</div>
           </div>
-          <div style={styles.groupPill}>My Group</div>
+          <div style={styles.headerActions}>
+            <div style={styles.groupPill}>My Group</div>
+            {supabase && <button type="button" style={styles.signOut} onClick={signOut}>Sign out</button>}
+          </div>
         </div>
+        {dataMessage && <div style={styles.dataMessage} role="alert">{dataMessage}</div>}
+        {supabase && user && <div style={styles.signedIn}>Signed in as {user.email}</div>}
 
         {/* Add an expense */}
         <div style={styles.sectionTitle}>Add an expense</div>
@@ -235,12 +405,20 @@ export default function Home() {
 
         {/* Total */}
         <div style={styles.total}>Total {inr(total)}</div>
-        {nonzeroBalances.length > 0 && <div style={styles.balancePanel}>
+        <div style={styles.balancePanel}>
           <div style={styles.sectionTitle}>Group balances</div>
-          {nonzeroBalances.map(([name, balance]) => <div key={name} style={styles.balanceRow}>
-            <span>{name}</span><span>{balance > 0 ? `gets back ${inr(balance)}` : `owes ${inr(Math.abs(balance))}`}</span>
+          {balanceEntries.length === 0 && <div style={styles.balanceEmpty}>Everyone is settled up.</div>}
+          {balanceEntries.map(({ name, paise }) => <div key={name} style={styles.balanceRow}>
+            <span>{name}</span><span>{paise > 0 ? `gets back ${inr(paise / 100)}` : `owes ${inr(-paise / 100)}`}</span>
           </div>)}
-        </div>}
+          <div style={styles.settleTitle}>Settle up</div>
+          {settlements.length === 0
+            ? <div style={styles.balanceEmpty}>No payments needed right now.</div>
+            : settlements.map((settlement, index) => <div style={styles.settlementRow} key={`${settlement.from}-${settlement.to}-${index}`}>
+              <span><strong>{settlement.from}</strong> pays <strong>{settlement.to}</strong></span>
+              <strong style={styles.settlementAmount}>{inr(settlement.paise / 100)}</strong>
+            </div>)}
+        </div>
       </div>
 
       <p style={styles.footnote}>
@@ -261,7 +439,7 @@ const styles = {
   },
   card: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: 560,
     background: 'var(--card)',
     borderRadius: 24,
     boxShadow: '0 24px 60px -24px rgba(13,27,62,.28)',
@@ -337,6 +515,16 @@ const styles = {
     fontWeight: 800, fontSize: 16, color: 'var(--ink)',
   },
   balancePanel: { marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 14 },
+  headerActions: { display: 'flex', alignItems: 'center', gap: 8 },
+  signOut: { border: '1px solid var(--line)', borderRadius: 999, padding: '6px 10px', color: 'var(--muted)', background: '#fff', fontSize: 11.5, fontWeight: 700 },
+  authForm: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 },
+  authMessage: { color: 'var(--blue)', fontSize: 12.5, marginTop: 12 },
+  dataMessage: { color: '#a13d30', fontSize: 12.5, padding: '10px 12px', borderRadius: 12, background: '#fff3f1', marginBottom: 12 },
+  signedIn: { color: 'var(--muted)', fontSize: 11.5, marginTop: -10, marginBottom: 14, overflowWrap: 'anywhere' },
   balanceRow: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', color: 'var(--muted)', fontSize: 12.5 },
+  balanceEmpty: { color: 'var(--muted)', fontSize: 12.5, padding: '6px 0' },
+  settleTitle: { fontSize: 14, fontWeight: 800, marginTop: 12, marginBottom: 4 },
+  settlementRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '10px 12px', marginTop: 7, borderRadius: 12, background: '#f7f9fc', border: '1px solid var(--line)', fontSize: 12.5 },
+  settlementAmount: { color: 'var(--blue)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
   footnote: { color: 'var(--muted)', fontSize: 12.5, textAlign: 'center', lineHeight: 1.6, marginTop: 20, maxWidth: 420 },
 };
