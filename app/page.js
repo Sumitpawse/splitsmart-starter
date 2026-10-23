@@ -100,6 +100,7 @@ export default function Home() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMode, setAuthMode] = useState('signin');
+  const [authType, setAuthType] = useState('username');
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authMessage, setAuthMessage] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
@@ -201,18 +202,25 @@ export default function Home() {
     setAuthBusy(true);
     setAuthMessage('');
     try {
+      const username = authEmail.trim().toLowerCase();
+      if (authType === 'username' && !/^[a-z0-9][a-z0-9._-]{2,29}$/.test(username)) {
+        throw new Error('Use a username with 3–30 letters, numbers, dots, dashes, or underscores.');
+      }
+      const authIdentity = authType === 'username' ? `${username}@users.splitsmart.invalid` : authEmail.trim();
       const result = authMode === 'signup'
-        ? await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword })
-        : await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+        ? await supabase.auth.signUp({ email: authIdentity, password: authPassword })
+        : await supabase.auth.signInWithPassword({ email: authIdentity, password: authPassword });
       if (result.error) {
         const message = result.error.message || 'Unknown authentication error.';
         setAuthMessage(message.toLowerCase().includes('email rate limit exceeded')
           ? 'Supabase has reached its email sending limit. In Supabase, open Authentication → Providers → Email and turn off Confirm Email, then try Create account again. Password sign-in itself does not send email.'
           : `Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${message}`);
       } else if (authMode === 'signup' && result.data.user?.identities?.length === 0) {
-        setAuthMessage('An account already exists for this email. Switch to Sign in. If you first used a magic link, that account may not have a password yet.');
+        setAuthMessage(`An account already exists for this ${authType}. Switch to Sign in.`);
       } else if (authMode === 'signup' && !result.data.session) {
-        setAuthMessage('Account created. Supabase requires email confirmation before the first sign in.');
+        setAuthMessage(authType === 'username'
+          ? 'Supabase is still requiring email confirmation. Turn off Confirm Email in Supabase → Authentication → Sign In / Providers → Email, then create this username again.'
+          : 'Account created. Supabase requires email confirmation before the first sign in.');
       } else {
         setAuthMessage(authMode === 'signup' ? 'Account created and signed in.' : 'Signed in.');
       }
@@ -227,6 +235,10 @@ export default function Home() {
   };
 
   const requestPasswordReset = async () => {
+    if (authType === 'username') {
+      setAuthMessage('Username accounts do not use email. To recover an account, switch to email login before requesting a reset.');
+      return;
+    }
     if (!supabase || !authEmail.trim()) {
       setAuthMessage('Enter your account email first.');
       return;
@@ -370,16 +382,19 @@ export default function Home() {
       <div style={styles.card}>
         <div style={styles.header}><div style={styles.brand}><div style={styles.logo}>S</div><div style={styles.title}>SplitSmart</div></div><div style={styles.groupPill}>My Group</div></div>
         <div style={styles.sectionTitle}>Sign in to SplitSmart</div>
-        <div style={styles.examples}>Sign in with your email and password, or create an account.</div>
+        <div style={styles.examples}>{authType === 'username' ? 'Use a username and password. After email confirmation is disabled in Supabase, this login sends no emails.' : 'Use the email and password from your existing account.'}</div>
         <form onSubmit={submitAuth} style={styles.authForm}>
-          <input style={styles.fieldInput} type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" aria-label="Email address" />
+          <input style={styles.fieldInput} type={authType === 'username' ? 'text' : 'email'} required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder={authType === 'username' ? 'Username' : 'you@example.com'} aria-label={authType === 'username' ? 'Username' : 'Email address'} autoComplete={authType === 'username' ? 'username' : 'email'} />
           <input style={styles.fieldInput} type="password" required minLength={6} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password (at least 6 characters)" aria-label="Password" autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} />
           <button style={styles.submitBtn} type="submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
         </form>
         <button type="button" style={styles.authModeToggle} onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setAuthMessage(''); }}>
           {authMode === 'signup' ? 'Already have an account? Sign in' : 'New to SplitSmart? Create an account'}
         </button>
-        {authMode === 'signin' && <button type="button" style={styles.authModeToggle} onClick={requestPasswordReset} disabled={authBusy}>Forgot password? (one-time email)</button>}
+        <button type="button" style={styles.authModeToggle} onClick={() => { setAuthType(authType === 'username' ? 'email' : 'username'); setAuthMessage(''); }}>
+          {authType === 'username' ? 'Use existing email account' : 'Use username account (no email)'}
+        </button>
+        {authType === 'email' && authMode === 'signin' && <button type="button" style={styles.authModeToggle} onClick={requestPasswordReset} disabled={authBusy}>Forgot password? (one-time email)</button>}
         {authMessage && <div style={{ ...styles.authMessage, color: authMessage.startsWith('Could not') || authMessage.startsWith('An account') ? '#a13d30' : 'var(--blue)' }} role="status">{authMessage}</div>}
       </div>
     </main>;
