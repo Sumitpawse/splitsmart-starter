@@ -100,6 +100,7 @@ export default function Home() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMode, setAuthMode] = useState('signin');
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [authMessage, setAuthMessage] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [dataMessage, setDataMessage] = useState('');
@@ -120,8 +121,9 @@ export default function Home() {
         setUser(data?.session?.user || null);
         setAuthReady(true);
       });
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
         setUser(session?.user || null);
+        if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
         setAuthReady(true);
       });
       return () => subscription.unsubscribe();
@@ -224,6 +226,45 @@ export default function Home() {
     }
   };
 
+  const requestPasswordReset = async () => {
+    if (!supabase || !authEmail.trim()) {
+      setAuthMessage('Enter your account email first.');
+      return;
+    }
+    setAuthBusy(true);
+    setAuthMessage('');
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), { redirectTo: window.location.origin });
+      setAuthMessage(error
+        ? `Could not send password reset: ${error.message}`
+        : 'Check your email for a one-time password reset link. After setting a password, future sign-ins will not need email.');
+    } catch (error) {
+      setAuthMessage(`Could not send password reset: ${error.message || 'Try again later.'}`);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const saveNewPassword = async (event) => {
+    event.preventDefault();
+    if (!supabase || authPassword.length < 6) return;
+    setAuthBusy(true);
+    setAuthMessage('');
+    try {
+      const { error } = await supabase.auth.updateUser({ password: authPassword });
+      if (error) setAuthMessage(`Could not update password: ${error.message}`);
+      else {
+        setPasswordRecovery(false);
+        setAuthPassword('');
+        setAuthMessage('Password saved. You can use it for future sign-ins.');
+      }
+    } catch (error) {
+      setAuthMessage(`Could not update password: ${error.message || 'Try again.'}`);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) {
@@ -311,6 +352,19 @@ export default function Home() {
     return <main style={styles.page}><div style={styles.card}>Loading your SplitSmart account…</div></main>;
   }
 
+  if (supabase && passwordRecovery && user) {
+    return <main style={styles.page}><div style={styles.card}>
+      <div style={styles.header}><div style={styles.brand}><div style={styles.logo}>S</div><div style={styles.title}>SplitSmart</div></div></div>
+      <div style={styles.sectionTitle}>Set a password</div>
+      <div style={styles.examples}>This is a one-time step for your existing account. Your saved expenses stay with it.</div>
+      <form onSubmit={saveNewPassword} style={styles.authForm}>
+        <input style={styles.fieldInput} type="password" required minLength={6} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="New password (at least 6 characters)" aria-label="New password" autoComplete="new-password" />
+        <button style={styles.submitBtn} type="submit" disabled={authBusy}>{authBusy ? 'Saving…' : 'Save password'}</button>
+      </form>
+      {authMessage && <div style={styles.authMessage} role="status">{authMessage}</div>}
+    </div></main>;
+  }
+
   if (supabase && !user) {
     return <main style={styles.page}>
       <div style={styles.card}>
@@ -325,6 +379,7 @@ export default function Home() {
         <button type="button" style={styles.authModeToggle} onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setAuthMessage(''); }}>
           {authMode === 'signup' ? 'Already have an account? Sign in' : 'New to SplitSmart? Create an account'}
         </button>
+        {authMode === 'signin' && <button type="button" style={styles.authModeToggle} onClick={requestPasswordReset} disabled={authBusy}>Forgot password? (one-time email)</button>}
         {authMessage && <div style={{ ...styles.authMessage, color: authMessage.startsWith('Could not') || authMessage.startsWith('An account') ? '#a13d30' : 'var(--blue)' }} role="status">{authMessage}</div>}
       </div>
     </main>;
