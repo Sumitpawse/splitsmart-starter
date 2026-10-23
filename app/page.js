@@ -198,17 +198,24 @@ export default function Home() {
     if (!supabase || !authEmail.trim() || !authPassword) return;
     setAuthBusy(true);
     setAuthMessage('');
-    const result = authMode === 'signup'
-      ? await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword })
-      : await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
-    setAuthMessage(result.error
-      ? result.error.message
-      : authMode === 'signup' && !result.data.session
-        ? 'Account created. Check your email to confirm it, then sign in with your password.'
-        : authMode === 'signup'
-          ? 'Account created and signed in.'
-          : 'Signed in.');
-    setAuthBusy(false);
+    try {
+      const result = authMode === 'signup'
+        ? await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword })
+        : await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+      if (result.error) {
+        setAuthMessage(`Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${result.error.message}`);
+      } else if (authMode === 'signup' && result.data.user?.identities?.length === 0) {
+        setAuthMessage('An account already exists for this email. Switch to Sign in. If you first used a magic link, that account may not have a password yet.');
+      } else if (authMode === 'signup' && !result.data.session) {
+        setAuthMessage('Account created. Supabase requires email confirmation before the first sign in.');
+      } else {
+        setAuthMessage(authMode === 'signup' ? 'Account created and signed in.' : 'Signed in.');
+      }
+    } catch (error) {
+      setAuthMessage(`Could not ${authMode === 'signup' ? 'create account' : 'sign in'}: ${error.message || 'Check your internet connection and try again.'}`);
+    } finally {
+      setAuthBusy(false);
+    }
   };
 
   const signOut = async () => {
@@ -312,7 +319,7 @@ export default function Home() {
         <button type="button" style={styles.authModeToggle} onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setAuthMessage(''); }}>
           {authMode === 'signup' ? 'Already have an account? Sign in' : 'New to SplitSmart? Create an account'}
         </button>
-        {authMessage && <div style={styles.authMessage} role="status">{authMessage}</div>}
+        {authMessage && <div style={{ ...styles.authMessage, color: authMessage.startsWith('Could not') || authMessage.startsWith('An account') ? '#a13d30' : 'var(--blue)' }} role="status">{authMessage}</div>}
       </div>
     </main>;
   }
