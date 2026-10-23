@@ -98,6 +98,8 @@ export default function Home() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(!hasSupabaseConfig);
   const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authMode, setAuthMode] = useState('signin');
   const [authMessage, setAuthMessage] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [dataMessage, setDataMessage] = useState('');
@@ -191,16 +193,21 @@ export default function Home() {
     }
   }, [expenses, ready, supabase]);
 
-  const sendSignInLink = async (event) => {
+  const submitAuth = async (event) => {
     event.preventDefault();
-    if (!supabase || !authEmail.trim()) return;
+    if (!supabase || !authEmail.trim() || !authPassword) return;
     setAuthBusy(true);
     setAuthMessage('');
-    const { error } = await supabase.auth.signInWithOtp({
-      email: authEmail.trim(),
-      options: { emailRedirectTo: window.location.origin },
-    });
-    setAuthMessage(error ? error.message : 'Check your email for the sign-in link.');
+    const result = authMode === 'signup'
+      ? await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword })
+      : await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword });
+    setAuthMessage(result.error
+      ? result.error.message
+      : authMode === 'signup' && !result.data.session
+        ? 'Account created. Check your email to confirm it, then sign in with your password.'
+        : authMode === 'signup'
+          ? 'Account created and signed in.'
+          : 'Signed in.');
     setAuthBusy(false);
   };
 
@@ -296,11 +303,15 @@ export default function Home() {
       <div style={styles.card}>
         <div style={styles.header}><div style={styles.brand}><div style={styles.logo}>S</div><div style={styles.title}>SplitSmart</div></div><div style={styles.groupPill}>My Group</div></div>
         <div style={styles.sectionTitle}>Sign in to SplitSmart</div>
-        <div style={styles.examples}>Enter your email and we’ll send you a secure sign-in link.</div>
-        <form onSubmit={sendSignInLink} style={styles.authForm}>
+        <div style={styles.examples}>Sign in with your email and password, or create an account.</div>
+        <form onSubmit={submitAuth} style={styles.authForm}>
           <input style={styles.fieldInput} type="email" required value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="you@example.com" aria-label="Email address" />
-          <button style={styles.submitBtn} type="submit" disabled={authBusy}>{authBusy ? 'Sending…' : 'Email me a sign-in link'}</button>
+          <input style={styles.fieldInput} type="password" required minLength={6} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password (at least 6 characters)" aria-label="Password" autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} />
+          <button style={styles.submitBtn} type="submit" disabled={authBusy}>{authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : 'Sign in'}</button>
         </form>
+        <button type="button" style={styles.authModeToggle} onClick={() => { setAuthMode(authMode === 'signin' ? 'signup' : 'signin'); setAuthMessage(''); }}>
+          {authMode === 'signup' ? 'Already have an account? Sign in' : 'New to SplitSmart? Create an account'}
+        </button>
         {authMessage && <div style={styles.authMessage} role="status">{authMessage}</div>}
       </div>
     </main>;
@@ -518,6 +529,7 @@ const styles = {
   headerActions: { display: 'flex', alignItems: 'center', gap: 8 },
   signOut: { border: '1px solid var(--line)', borderRadius: 999, padding: '6px 10px', color: 'var(--muted)', background: '#fff', fontSize: 11.5, fontWeight: 700 },
   authForm: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 },
+  authModeToggle: { border: 0, background: 'transparent', color: 'var(--blue)', cursor: 'pointer', font: 'inherit', fontSize: 13, marginTop: 12, padding: 0 },
   authMessage: { color: 'var(--blue)', fontSize: 12.5, marginTop: 12 },
   dataMessage: { color: '#a13d30', fontSize: 12.5, padding: '10px 12px', borderRadius: 12, background: '#fff3f1', marginBottom: 12 },
   signedIn: { color: 'var(--muted)', fontSize: 11.5, marginTop: -10, marginBottom: 14, overflowWrap: 'anywhere' },
