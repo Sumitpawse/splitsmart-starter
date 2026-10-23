@@ -79,8 +79,8 @@ npm run start   # run the production build
 
 ## Hour 5 — Supabase logins + database
 
-The app uses browser-only `localStorage` when Supabase is not configured. To enable
-email sign-in and cloud persistence:
+The app uses browser-only `localStorage` when Supabase is not configured. With Supabase
+configured, expenses are stored in Postgres and protected by Row-Level Security:
 
 1. Create a Supabase project, then copy its **Project URL** and **anon public key** from
    **Project Settings → API**.
@@ -90,13 +90,33 @@ email sign-in and cloud persistence:
    the expenses table and its per-user row-level security policies.
 4. In Supabase **Authentication → URL Configuration**, allow `http://localhost:3000`
    (and your deployed site URL when you configure hosting).
-5. Restart the development server with `npm run dev`. Sign in with your email link;
-   expenses will then load from and save to Supabase for that account. Existing browser
-   expenses are imported once when that account has no database expenses yet.
+5. Restart the development server with `npm run dev`. The app supports email/password
+   accounts and username/password accounts. To use usernames without signup emails, turn
+   off **Confirm Email** under **Authentication → Sign In / Providers → Email**. Expenses
+   are saved to Supabase for the signed-in account. Existing browser expenses are imported
+   once when that account has no database expenses yet.
 
 For Vercel, add the same two environment variables in the project's Environment
 Variables settings and redeploy there. This repository change does not configure or
 deploy a Vercel project.
+
+## Hour 6 — private groups
+
+After Hour 5 is set up, open Supabase **SQL Editor → New query**, paste and run
+[`supabase/schema_hour6.sql`](supabase/schema_hour6.sql). It creates private groups,
+membership, invite codes, and group-scoped Row-Level Security. Existing expenses are
+preserved in a private **My Group** for their current owner.
+
+After deploying this code, the app creates a **My Group** for a user with no groups.
+Use the group selector to switch groups, share the displayed invite code, or enter a
+friend's code to join. New expenses are saved to the selected group. The SQL uses
+security-definer functions for group creation and joining so clients cannot add
+themselves to a group by inserting membership rows directly.
+
+To check privacy, sign in with a second account in a private browser, join the first
+account's group using its code, and confirm that expenses in groups it has not joined
+do not appear. A separate username account starts with its own data; existing expenses
+stay under their original Supabase account.
 
 ---
 

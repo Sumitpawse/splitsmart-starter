@@ -105,6 +105,11 @@ export default function Home() {
   const [authMessage, setAuthMessage] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [dataMessage, setDataMessage] = useState('');
+  const [groups, setGroups] = useState([]);
+  const [activeGroupId, setActiveGroupId] = useState('');
+  const [groupsReady, setGroupsReady] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [groupCode, setGroupCode] = useState('');
   const [expenses, setExpenses] = useState(SEED);
   const [sentence, setSentence] = useState('');
   const [description, setDescription] = useState('');
@@ -124,6 +129,12 @@ export default function Home() {
       });
       const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
         setUser(session?.user || null);
+        if (!session?.user) {
+          setGroups([]);
+          setActiveGroupId('');
+          setGroupsReady(false);
+          setExpenses([]);
+        }
         if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
         setAuthReady(true);
       });
@@ -139,11 +150,51 @@ export default function Home() {
   useEffect(() => {
     if (!supabase || !user) return;
     let cancelled = false;
+    const loadGroups = async () => {
+      setGroupsReady(false);
+      setReady(false);
+      const { data, error } = await supabase.from('groups').select('id,name,join_code,created_at').order('created_at', { ascending: true });
+      if (cancelled) return;
+      if (error) {
+        setDataMessage(`Could not load groups: ${error.message}. Run supabase/schema_hour6.sql in Supabase SQL Editor first.`);
+        setGroups([]); setActiveGroupId(''); setGroupsReady(true); setReady(true);
+        return;
+      }
+      let available = data || [];
+      if (available.length === 0) {
+        const { error: createError } = await supabase.rpc('create_group', { group_name: 'My Group' });
+        if (createError) {
+          setDataMessage(`Could not create your first group: ${createError.message}`);
+          setGroups([]); setActiveGroupId(''); setGroupsReady(true); setReady(true);
+          return;
+        }
+        const { data: refreshed, error: refreshError } = await supabase.from('groups').select('id,name,join_code,created_at').order('created_at', { ascending: true });
+        if (refreshError) {
+          setDataMessage(`Could not load groups: ${refreshError.message}`);
+          setGroups([]); setActiveGroupId(''); setGroupsReady(true); setReady(true);
+          return;
+        }
+        available = refreshed || [];
+      }
+      if (cancelled) return;
+      const savedId = localStorage.getItem('splitsmart.activeGroupId');
+      const selected = available.find((group) => group.id === savedId) || available[0];
+      setGroups(available);
+      setActiveGroupId(selected?.id || '');
+      setGroupsReady(true);
+    };
+    loadGroups();
+    return () => { cancelled = true; };
+  }, [supabase, user]);
+
+  useEffect(() => {
+    if (!supabase || !user || !groupsReady || !activeGroupId) return;
+    let cancelled = false;
     const loadExpenses = async () => {
       setReady(false);
       setExpenses([]);
       setDataMessage('');
-      const { data, error } = await supabase.from('expenses').select('*').eq('user_id', user.id).order('created_at', { ascending: true });
+      const { data, error } = await supabase.from('expenses').select('*').eq('group_id', activeGroupId).order('created_at', { ascending: true });
       if (cancelled) return;
       if (error) {
         setDataMessage(`Could not load expenses: ${error.message}`);
@@ -155,6 +206,7 @@ export default function Home() {
             if (Array.isArray(saved) && saved.length) {
               const importRows = saved.map((expense) => ({
                 user_id: user.id,
+                group_id: activeGroupId,
                 name: expense.name || expense.description || 'Expense',
                 description: expense.description || expense.name || 'Expense',
                 emoji: expense.emoji || '🧾',
@@ -187,7 +239,7 @@ export default function Home() {
     };
     loadExpenses();
     return () => { cancelled = true; };
-  }, [supabase, user]);
+  }, [supabase, user, groupsReady, activeGroupId]);
 
   // Save locally only when Supabase is not configured.
   useEffect(() => {
@@ -208,7 +260,7 @@ export default function Home() {
       }
       const authIdentity = authType === 'username' ? `${username}@users.splitsmart.invalid` : authEmail.trim();
       const result = authMode === 'signup'
-        ? await supabase.auth.signUp({ email: authIdentity, password: authPassword })
+        ? await supabase.auth.signUp({ email: authIdentity, password: authPassword, options: authType === 'username' ? { data: { username } } : undefined })
         : await supabase.auth.signInWithPassword({ email: authIdentity, password: authPassword });
       if (result.error) {
         const message = result.error.message || 'Unknown authentication error.';
@@ -317,6 +369,60 @@ export default function Home() {
     }
   };
 
+  const createGroup = async (event) => {
+    event.preventDefault();
+    const name = newGroupName.trim();
+    if (!supabase || !name) return;
+    setDataMessage('');
+    const { data: groupId, error } = await supabase.rpc('create_group', { group_name: name });
+    if (error) {
+      setDataMessage(`Could not create group: ${error.message}`);
+      return;
+    }
+    const { data: updatedGroups, error: loadError } = await supabase.from('groups').select('id,name,join_code,created_at').order('created_at', { ascending: true });
+    if (loadError) {
+      setDataMessage(`Group created, but could not refresh the list: ${loadError.message}`);
+      return;
+    }
+    setGroups(updatedGroups || []);
+    setActiveGroupId(groupId);
+    localStorage.setItem('splitsmart.activeGroupId', groupId);
+    setNewGroupName('');
+    setExpenses([]);
+    setReady(false);
+  };
+
+  const joinGroup = async (event) => {
+    event.preventDefault();
+    if (!supabase || !groupCode.trim()) return;
+    setDataMessage('');
+    const { data: groupId, error } = await supabase.rpc('join_group', { code: groupCode.trim() });
+    if (error) {
+      setDataMessage(`Could not join group: ${error.message}`);
+      return;
+    }
+    const { data: updatedGroups, error: loadError } = await supabase.from('groups').select('id,name,join_code,created_at').order('created_at', { ascending: true });
+    if (loadError) {
+      setDataMessage(`Joined group, but could not refresh the list: ${loadError.message}`);
+      return;
+    }
+    setGroups(updatedGroups || []);
+    if (groupId !== activeGroupId) {
+      setActiveGroupId(groupId);
+      localStorage.setItem('splitsmart.activeGroupId', groupId);
+      setExpenses([]);
+      setReady(false);
+    }
+    setGroupCode('');
+  };
+
+  const switchGroup = (groupId) => {
+    setActiveGroupId(groupId);
+    localStorage.setItem('splitsmart.activeGroupId', groupId);
+    setExpenses([]);
+    setReady(false);
+  };
+
   const addExpense = async () => {
     if (!canAddExpense) return;
     const expense = {
@@ -329,7 +435,7 @@ export default function Home() {
     if (supabase) {
       setDataMessage('');
       const { data, error } = await supabase.from('expenses').insert({
-        user_id: user.id, name: expense.name, description: expense.description, emoji: expense.emoji,
+        user_id: user.id, group_id: activeGroupId, name: expense.name, description: expense.description, emoji: expense.emoji,
         paid_by: expense.paidBy, amount: expense.amount, people: expense.people, each: expense.each,
         split_mode: expense.splitMode, splits: expense.splits,
       }).select().single();
@@ -351,7 +457,7 @@ export default function Home() {
   const removeExpense = async (id) => {
     if (supabase) {
       setDataMessage('');
-      const { error } = await supabase.from('expenses').delete().eq('id', id).eq('user_id', user.id);
+      const { error } = await supabase.from('expenses').delete().eq('id', id).eq('group_id', activeGroupId);
       if (error) {
         setDataMessage(`Could not remove expense: ${error.message}`);
         return;
@@ -360,7 +466,7 @@ export default function Home() {
     setExpenses((list) => list.filter((e) => e.id !== id));
   };
 
-  if (supabase && (!authReady || (user && !ready))) {
+  if (supabase && (!authReady || (user && (!groupsReady || !ready)))) {
     return <main style={styles.page}><div style={styles.card}>Loading your SplitSmart account…</div></main>;
   }
 
@@ -410,12 +516,28 @@ export default function Home() {
             <div style={styles.title}>Sumit Pawse</div>
           </div>
           <div style={styles.headerActions}>
-            <div style={styles.groupPill}>My Group</div>
+            <div style={styles.groupPill}>{groups.find((group) => group.id === activeGroupId)?.name || 'My Group'}</div>
             {supabase && <button type="button" style={styles.signOut} onClick={signOut}>Sign out</button>}
           </div>
         </div>
+        {supabase && user && activeGroupId && <section style={styles.groupsPanel} aria-label="Group management">
+          <label style={styles.fieldLabel}>Current group
+            <select style={styles.fieldInput} value={activeGroupId} onChange={(event) => switchGroup(event.target.value)}>
+              {groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+            </select>
+          </label>
+          <div style={styles.groupInvite}>Invite code: <strong>{groups.find((group) => group.id === activeGroupId)?.join_code || '—'}</strong></div>
+          <form style={styles.groupAction} onSubmit={createGroup}>
+            <input style={styles.fieldInput} value={newGroupName} onChange={(event) => setNewGroupName(event.target.value)} maxLength={80} placeholder="New group name" aria-label="New group name" required />
+            <button style={styles.smallAction} type="submit">Create group</button>
+          </form>
+          <form style={styles.groupAction} onSubmit={joinGroup}>
+            <input style={styles.fieldInput} value={groupCode} onChange={(event) => setGroupCode(event.target.value)} maxLength={12} placeholder="Friend's invite code" aria-label="Group invite code" required />
+            <button style={styles.smallAction} type="submit">Join group</button>
+          </form>
+        </section>}
         {dataMessage && <div style={styles.dataMessage} role="alert">{dataMessage}</div>}
-        {supabase && user && <div style={styles.signedIn}>Signed in as {user.email}</div>}
+        {supabase && user && <div style={styles.signedIn}>Signed in as {user.user_metadata?.username || user.email}</div>}
 
         {/* Add an expense */}
         <div style={styles.sectionTitle}>Add an expense</div>
@@ -472,7 +594,7 @@ export default function Home() {
                 : `Custom shares total ${inr(customTotal)}; adjust them to match ${inr(amountValue)}.`
             : 'Enter the expense, payer, and at least one person.'}
         </div>
-        <button style={styles.submitBtn} onClick={addExpense} aria-label="Add expense" disabled={!canAddExpense}>Add expense</button>
+        <button style={styles.submitBtn} onClick={addExpense} aria-label="Add expense" disabled={!canAddExpense || (supabase && !activeGroupId)}>Add expense</button>
 
         {/* Expense list */}
         <div style={styles.list}>
@@ -614,6 +736,10 @@ const styles = {
   authForm: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 },
   authModeToggle: { border: 0, background: 'transparent', color: 'var(--blue)', cursor: 'pointer', font: 'inherit', fontSize: 13, marginTop: 12, padding: 0 },
   authMessage: { color: 'var(--blue)', fontSize: 12.5, marginTop: 12 },
+  groupsPanel: { display: 'grid', gap: 9, marginBottom: 16, padding: 12, border: '1px solid var(--line)', borderRadius: 14, background: '#fbfcff' },
+  groupInvite: { fontSize: 12, color: 'var(--muted)' },
+  groupAction: { display: 'flex', gap: 8, alignItems: 'center' },
+  smallAction: { flex: 'none', border: 0, borderRadius: 10, padding: '10px 12px', color: '#fff', background: 'linear-gradient(135deg, var(--blue), var(--cyan))', fontSize: 12, fontWeight: 800, cursor: 'pointer' },
   dataMessage: { color: '#a13d30', fontSize: 12.5, padding: '10px 12px', borderRadius: 12, background: '#fff3f1', marginBottom: 12 },
   signedIn: { color: 'var(--muted)', fontSize: 11.5, marginTop: -10, marginBottom: 14, overflowWrap: 'anywhere' },
   balanceRow: { display: 'flex', justifyContent: 'space-between', gap: 10, padding: '6px 0', color: 'var(--muted)', fontSize: 12.5 },
